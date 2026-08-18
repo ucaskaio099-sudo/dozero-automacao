@@ -1,0 +1,39 @@
+# ============================================================
+# PROTECAO DO PRODUTO PAGO
+# Este repositorio e PUBLICO. Nada que seja produto pago pode
+# entrar aqui. Se voce adicionar um arquivo novo, confira antes.
+# ============================================================
+*.pdf
+*.epub
+*.mobi
+*.zip
+*.rar
+
+# Segredos - o token do Instagram vive em GitHub Secrets, nunca em arquivo
+.env
+.env.*
+*token*.json
+*.key
+*.pem
+segredos/
+
+# Midia gerada (temporaria - o workflow gera e poda sozinho).
+# Os arquivos do dia sao commitados pelo workflow com "git add -f".
+midia/*
+!midia/.gitkeep
+
+# Frames intermediarios dos reels
+.frames/
+*.tmp.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini

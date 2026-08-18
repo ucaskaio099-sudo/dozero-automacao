@@ -1,0 +1,10 @@
+{
+  "handle": "@dozero.aoreal",
+  "preco": "R$49,99",
+  "link_bio": "link na bio",
+  "fuso": "America/Sao_Paulo",
+  "inicio": "2026-08-18",
+  "dias": 90,
+  "repo": "SEU-USUARIO/dozero-automacao",
+  "branch": "main"
+}
