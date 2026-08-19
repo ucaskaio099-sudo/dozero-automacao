@@ -30,13 +30,13 @@ jobs:
 
       - name: Preparar site estático
         run: |
-          mkdir -p _site
-          if [ -d midia ]; then cp -a midia _site/midia; fi
-          printf '<!doctype html><title>dozero midia</title>' > _site/index.html
+          mkdir -p docs
+          if [ -d midia ]; then cp -a midia docs/midia; fi
+          printf '<!doctype html><title>dozero midia</title>' > docs/index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: docs
       - id: deploy
         uses: actions/deploy-pages@v4
