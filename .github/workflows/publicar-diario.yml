@@ -2,9 +2,8 @@ name: Publicar Instagram Diário
 
 on:
   schedule:
-    # Rodar a cada 30 min no horário BR (UTC-3) → 06:30-23:30 BR
-    # Meta Business Suite não aceita agendamento > 75 dias, mas a API aceita.
-    - cron: "*/30 9-2 * * *"  # 06:30-23:30 BR = 09:30-02:30 UTC
+    # 06:30–23:30 America/Sao_Paulo ≈ 09:30–02:30 UTC
+    - cron: "7,37 9-23,0-2 * * *"
   workflow_dispatch:
     inputs:
       post:
@@ -13,34 +12,34 @@ on:
       dry_run:
         description: "Simular sem publicar"
         type: boolean
-        default: true
+        default: false
       incluir_atrasados:
         description: "Incluir posts fora da janela"
         type: boolean
-        default: false
+        default: true
 
 permissions:
-  contents: read
+  contents: write
+  pages: write
+  id-token: write
 
 env:
   TIMEZONE: America/Sao_Paulo
-  POST_WINDOW_HOURS: 24
-  MEDIA_POLL_SECONDS: 10
-  MEDIA_POLL_TIMEOUT_SECONDS: 600
-  META_HTTP_TIMEOUT_SECONDS: 60
+  POST_WINDOW_HOURS: "48"
+  MEDIA_POLL_SECONDS: "10"
+  MEDIA_POLL_TIMEOUT_SECONDS: "600"
+  META_HTTP_TIMEOUT_SECONDS: "60"
   META_GRAPH_API_VERSION: v25.0
-  DRY_RUN: true
+  DRY_RUN: "false"
 
 jobs:
   publicar:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Checkout repositório
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
@@ -52,48 +51,42 @@ jobs:
       - name: Gerar artes faltantes
         run: python scripts/gerar_arte.py
 
-      - name: Preparar variáveis de ambiente
+      - name: Variáveis
         run: |
-          echo "INSTAGRAM_ACCESS_TOKEN=${{ secrets.INSTAGRAM_ACCESS_TOKEN }}" >> $GITHUB_ENV
-          echo "INSTAGRAM_BUSINESS_ACCOUNT_ID=${{ secrets.INSTAGRAM_BUSINESS_ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "FACEBOOK_PAGE_ID=${{ secrets.FACEBOOK_PAGE_ID }}" >> $GITHUB_ENV
-          echo "PUBLIC_MEDIA_BASE_URL=${{ secrets.PUBLIC_MEDIA_BASE_URL }}" >> $GITHUB_ENV
-          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> $GITHUB_ENV
-          # Override DRY_RUN se for workflow_dispatch com dry_run=false
-          if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
-            echo "DRY_RUN=false" >> $GITHUB_ENV
+          echo "INSTAGRAM_ACCESS_TOKEN=${{ secrets.INSTAGRAM_ACCESS_TOKEN }}" >> "$GITHUB_ENV"
+          echo "INSTAGRAM_BUSINESS_ACCOUNT_ID=${{ secrets.INSTAGRAM_BUSINESS_ACCOUNT_ID }}" >> "$GITHUB_ENV"
+          echo "FACEBOOK_PAGE_ID=${{ secrets.FACEBOOK_PAGE_ID }}" >> "$GITHUB_ENV"
+          echo "PUBLIC_MEDIA_BASE_URL=${{ secrets.PUBLIC_MEDIA_BASE_URL }}" >> "$GITHUB_ENV"
+          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "DRY_RUN=true" >> "$GITHUB_ENV"
           fi
 
-      - name: Publicar posts vencidos
-        id: publicar
+      - name: Publicar
         run: |
-          ARGS=()
-          if [ "${{ github.event.inputs.post }}" != "" ]; then
+          set -e
+          ARGS=(--limite 3)
+          if [ -n "${{ github.event.inputs.post }}" ]; then
             for p in ${{ github.event.inputs.post }}; do
               ARGS+=(--post "$p")
             done
           fi
-          if [ "${{ github.event.inputs.incluir_atrasados }}" = "true" ]; then
+          if [ "${{ github.event.inputs.incluir_atrasados }}" != "false" ]; then
             ARGS+=(--incluir-atrasados)
           fi
           python scripts/publicar.py "${ARGS[@]}"
         shell: bash
 
-      - name: Commit calendário atualizado
+      - name: Commit calendário e mídia
         if: always() && !cancelled()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet conteudo/calendario.csv conteudo/estado_publicacao.json; then
-            git add conteudo/calendario.csv conteudo/estado_publicacao.json
-            git commit -m "chore: atualiza status de publicação [skip ci]"
-            git push
+          git add -f midia/ || true
+          git add conteudo/calendario.csv conteudo/estado_publicacao.json || true
+          if git diff --cached --quiet; then
+            echo "Nada para commitar"
           else
-            echo "Nenhuma mudança no calendário/estado para commitar"
+            git commit -m "chore: publicação / artes [skip ci]"
+            git push
           fi
-
-      - name: Notificar falha (opcional)
-        if: failure()
-        run: |
-          echo "::warning::Publicação falhou. Verifique os logs."
-          # Aqui você pode adicionar webhook Discord/Slack/email se quiser

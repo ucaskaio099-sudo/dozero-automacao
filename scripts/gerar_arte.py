@@ -16,6 +16,7 @@ calendario, que e' o que o publicador le depois.
 import argparse
 import os
 import sys
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -26,6 +27,9 @@ from comum import (MIDIA, RAIZ, escrever_calendario, ler_calendario,
                    carregar_config)
 
 SLIDES_CARROSSEL = 6
+REEL_FPS = 30
+REEL_DURATION_PER_SLIDE = 3  # segundos
+REEL_SLIDE_DURATION = 4
 
 
 # --- decomposicao da legenda ----------------------------------------------
@@ -208,6 +212,96 @@ GERADORES = {
 }
 
 
+def _ffmpeg_gerar_mp4(ffmpeg_bin, entrada, mp4_saida, fps=30):
+    """Gera MP4 a partir de imagem única via zoompan."""
+    cmd = [
+        ffmpeg_bin, "-y", "-loop", "1", "-i", entrada,
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,"
+               "zoompan=z='min(zoom+0.001,1.2)':d={}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920"
+               .format(fps * 8),
+        "-r", str(fps), "-t", "8",
+        "-pix_fmt", "yuv420p", mp4_saida,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+
+
+def gerar_reels(linha, config):
+    """Gera MP4 simples a partir dos slides do carrossel (se existirem).
+    Usa imageio-ffmpeg que traz o binário embutido."""
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+
+    pasta_carrossel = os.path.join(MIDIA, linha["post_id"])
+    # procura slides 1..6
+    slides = []
+    for i in range(1, SLIDES_CARROSSEL + 1):
+        nome = "{}-{}.jpg".format(linha["post_id"], i)
+        caminho = os.path.join(pasta_carrossel, nome)
+        if os.path.exists(caminho):
+            slides.append(caminho)
+    if not slides:
+        return None
+
+    pasta_reels = os.path.join(MIDIA, linha["post_id"])
+    os.makedirs(pasta_reels, exist_ok=True)
+    mp4_saida = os.path.join(pasta_reels, "{}-1.mp4".format(linha["post_id"]))
+
+    ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+    # usa o primeiro slide com efeito Ken Burns
+    try:
+        _ffmpeg_gerar_mp4(ffmpeg_bin, slides[0], mp4_saida)
+    except Exception:
+        return None
+
+    return ["{}/{}".format(linha["post_id"], os.path.basename(mp4_saida))]
+
+
+def gerar_reels_texto(linha, config):
+    """Gera MP4 para reel sem carrossel: cria um slide de texto e aplica Ken Burns."""
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+
+    pasta_reels = os.path.join(MIDIA, linha["post_id"])
+    os.makedirs(pasta_reels, exist_ok=True)
+    mp4_saida = os.path.join(pasta_reels, "{}-1.mp4".format(linha["post_id"]))
+
+    # cria slide temporário com gancho
+    img = marca.tela(marca.STORY)
+    d = ImageDraw.Draw(img)
+    w, h = marca.STORY
+    caixa = w - marca.MARGEM * 2
+    topo = 380
+    disponivel = 900
+    f, linhas, altura = marca.ajustar(
+        d, linha["gancho"], marca.bold, caixa, disponivel,
+        tam_max=84, tam_min=36, entrelinha=1.22,
+    )
+    y = topo + max(0, (disponivel - altura) // 2)
+    marca.regua(d, marca.MARGEM, y - 58)
+    marca.escrever(d, linhas, marca.MARGEM, y, f, entrelinha=1.22, destacar=True)
+    marca.rodape(d, marca.STORY, direita=config.get("link_bio", "link na bio"))
+
+    tmp_slide = os.path.join(pasta_reels, "_reel_slide.jpg")
+    marca.salvar_jpeg(img, tmp_slide)
+
+    ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+    try:
+        _ffmpeg_gerar_mp4(ffmpeg_bin, tmp_slide, mp4_saida)
+    except Exception as e:
+        print("Erro gerando reel de texto:", e)
+        return None
+    finally:
+        if os.path.exists(tmp_slide):
+            os.remove(tmp_slide)
+
+    return ["{}/{}".format(linha["post_id"], os.path.basename(mp4_saida))]
+
+
 # --- orquestracao ---------------------------------------------------------
 
 def gerar(linha, config, refazer=False):
@@ -253,12 +347,26 @@ def main():
 
     feitos = 0
     pulados = 0
-    reels = []
+    reels_sem_video = []
 
     for linha in alvo:
         if linha["formato"] == "reels":
-            if not linha.get("midia"):
-                reels.append(linha)
+            if linha.get("midia"):
+                # já tem vídeo, verifica se existe
+                arquivos = linha["midia"].split(";")
+                if all(os.path.exists(os.path.join(MIDIA, a)) for a in arquivos if a):
+                    pulados += 1
+                    continue
+            # tenta gerar a partir do carrossel
+            caminhos = gerar_reels(linha, config)
+            if not caminhos:
+                # fallback: gera a partir do próprio texto do reel
+                caminhos = gerar_reels_texto(linha, config)
+            if caminhos:
+                linha["midia"] = ";".join(caminhos)
+                feitos += 1
+            else:
+                reels_sem_video.append(linha)
             continue
         antes = linha.get("midia", "")
         caminhos = gerar(linha, config, refazer=args.refazer)
@@ -278,12 +386,13 @@ def main():
         print("Ja existiam (use --refazer pra regerar): {}".format(pulados))
     print("Saida: {}".format(MIDIA))
 
-    if reels:
-        print("\n{} reels sem video. O gerador nao cria video -- coloque o .mp4"
-              .format(len(reels)))
-        print("em midia/<post_id>/ e preencha a coluna `midia` do calendario.")
+    if reels_sem_video:
+        print("\n{} reels sem video/imagens base. O gerador tenta criar a partir do carrossel."
+              .format(len(reels_sem_video)))
+        print("Se não tiver carrossel correspondente, coloque o .mp4 em midia/<post_id>/")
+        print("e preencha a coluna `midia` do calendario.")
         print("Proximos 5:")
-        for l in reels[:5]:
+        for l in reels_sem_video[:5]:
             print("   {}  {}".format(l["post_id"], l["tema"][:58]))
 
 

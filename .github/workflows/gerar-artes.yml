@@ -38,10 +38,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet midia/; then
-            git add midia/
+          git add -f midia/
+          if git diff --cached --quiet; then
+            echo "Nenhuma arte nova"
+          else
             git commit -m "chore: regenera artes do calendário [skip ci]"
             git push
-          else
-            echo "Nenhuma arte nova"
           fi
